@@ -1,3 +1,5 @@
+require("populations");
+
 let Roles = require("roles");
 let Hive = require("hive");
 let Tasks = require("tasks");
@@ -5,20 +7,16 @@ let Tasks = require("tasks");
 let _Creep = require("util.creep");
 let _CPU = require("util.cpu");
 
+let labDefinitions;
+
 module.exports = {
 
-	Run: function(rmColony, listSpawnRooms, listPopulation, listLabs) {
-
-		/* For setting lab targets:
-				Memory.labs.targets[""] = { mineral: "", amount: , priority: };
-
-		 * For internal transfers:
-				Memory["terminal_orders"][""] = { room: "", resource: "energy", amount: , priority: 1};
-				Memory["terminal_orders"][""] = { room: "", resource: "", amount: , from: "", priority: 1};
-		 * For market trading:
-				Memory["terminal_orders"][""] = { market_id: "", amount: , from: "", priority: 4};
-				Memory["terminal_orders"][""] = { market_id: "", amount: , to: "", priority: 4};
-		*/
+	Run: function(rmColony) {
+		_CPU.Start(rmColony, "Industry-init");
+		labDefinitions = _.get(Memory, ["rooms", rmColony, "lab_definitions"]);
+		listSpawnRooms = _.get(Memory, ["rooms", rmColony, "spawn_assist", "rooms"]);		
+		listPopulation = _.get(Memory, ["rooms", rmColony, "custom_population"]);		
+		_CPU.End(rmColony, "Industry-init");
 
 		_CPU.Start(rmColony, "Industry-listCreeps");
 		let listCreeps = _.filter(Game.creeps, c => c.memory.room == rmColony);
@@ -30,8 +28,14 @@ module.exports = {
 			_CPU.End(rmColony, "Industry-runPopulation");
 		}
 
+		_CPU.Start(rmColony, "Industry-defineLabs");
+		if (Hive.isPulse_Labs()) {
+			this.defineLabs(rmColony);
+		}
+		_CPU.End(rmColony, "Industry-defineLabs");
+
 		_CPU.Start(rmColony, "Industry-runLabs");
-		this.runLabs(rmColony, listLabs);
+		this.runLabs(rmColony);
 		_CPU.End(rmColony, "Industry-runLabs");
 
 		if (Hive.isPulse_Main()) {
@@ -40,7 +44,7 @@ module.exports = {
 			_CPU.End(rmColony, "Industry-loadNukers");
 
 			_CPU.Start(rmColony, "Industry-createLabTasks");
-			this.createLabTasks(rmColony, listLabs);
+			this.createLabTasks(rmColony);
 			_CPU.End(rmColony, "Industry-createLabTasks");
 
 			_CPU.Start(rmColony, "Industry-runTerminal");
@@ -57,12 +61,15 @@ module.exports = {
 	runPopulation: function(rmColony, listCreeps, listSpawnRooms, listPopulation) {
 		let lCourier  = _.filter(listCreeps, (c) => c.memory.role == "courier" && (c.ticksToLive == undefined || c.ticksToLive > 80));
 
+		if (listPopulation == null)
+			listPopulation = Population_Industry;
+
         let popTarget = (listPopulation["courier"] == null ? 0 : listPopulation["courier"]["amount"]);
         let popActual = lCourier.length;
         Hive.populationTally(rmColony, popTarget, popActual);
 
         if (listPopulation["courier"] != null && lCourier.length < listPopulation["courier"]["amount"]) {
-			Memory["spawn_requests"].push({ room: rmColony, listRooms: listSpawnRooms, priority: 4, level: listPopulation["courier"]["level"],
+			Memory["hive"]["spawn_requests"].push({ room: rmColony, listRooms: listSpawnRooms, priority: 4, level: listPopulation["courier"]["level"],
 				scale_level: listPopulation["courier"] == null ? true : listPopulation["courier"]["scale_level"],
 				body: "courier", name: null, args: {role: "courier", room: rmColony} });
         }
@@ -103,8 +110,14 @@ module.exports = {
 		}
 	},
 
-	assignReaction: function(rmColony) {
-		let target = _.head(_.sortBy(_.sortBy(_.sortBy(_.filter(_.get(Memory, ["labs", "targets"]),
+	assignReaction: function(rmColony) {		
+		if (_.filter(Game["rooms"][rmColony].find(FIND_MY_STRUCTURES), s => { return s.structureType == "lab" 
+			&& _.filter(labDefinitions, def => { return _.get(def, "action") == "boost" && _.get(def, "lab") == s.id; }).length == 0 }).length < 3) {
+			console.log(`<font color=\"#A17BFF\">[Labs]</font> Unable to assign a reaction to ${rmColony}- not enough labs available for reactions (labs boosting?).`);
+			return;
+		}
+
+		let target = _.head(_.sortBy(_.sortBy(_.sortBy(_.filter(_.get(Memory, ["resources", "labs", "targets"]),
 			t => {
 				let amount = 0, r1_amount = 0, r2_amount = 0;
 				let reagents = getReagents(_.get(t, "mineral"));
@@ -119,20 +132,107 @@ module.exports = {
 			}),
 			t => _.get(t, "priority")),
 			t => _.get(t, "is_reagent")),
-			t => _.filter(_.get(Memory, ["labs", "reactions"]), r => { return _.get(r, "mineral") == _.get(t, "mineral"); }).length));
+			t => _.filter(_.get(Memory, ["resources", "labs", "reactions"]), r => { return _.get(r, "mineral") == _.get(t, "mineral"); }).length));
 
 		if (target != null) {
-			_.set(Memory, ["labs", "reactions", rmColony], { mineral: target.mineral, amount: target.amount });
+			_.set(Memory, ["resources", "labs", "reactions", rmColony], { mineral: target.mineral, amount: target.amount });
 			console.log(`<font color=\"#A17BFF\">[Labs]</font> Assigning ${rmColony} to create ${target.mineral}.`);
 		} else {
-			_.set(Memory, ["labs", "reactions", rmColony], { mineral: null, amount: null });
+			_.set(Memory, ["resources", "labs", "reactions", rmColony], { mineral: null, amount: null });
 			console.log(`<font color=\"#A17BFF\">[Labs]</font> No reaction to assign to ${rmColony}, idling.`);
 		}
 
 	},
 
-	runLabs: function(rmColony, listLabs) {
-		/* Arguments for listLabs:
+	defineLabs: function(rmColony) {
+		// Clean up labDefinitions, remove duplicate "boosts", remove "empty" if already empty
+		if (labDefinitions != null) {
+			for (let i = labDefinitions.length - 1; i >= 0; i--) {
+				if (_.get(labDefinitions[i], "action") == "boost") {
+					for (let j = labDefinitions.length - 1; j >= 0; j--) {
+						if (i == j)
+							continue;
+
+						if (_.get(labDefinitions[i], "lab") == _.get(labDefinitions[j], "lab")) {
+							labDefinitions.splice(i, 1)
+							continue;
+						}
+					}
+				} else if (_.get(labDefinitions[i], "action") == "empty") {
+					let labs = _.get(labDefinitions[i], "labs");
+					for (let j = labs.length - 1; j >= 0; j--) {
+						let lab = Game.getObjectById(labs[j]);
+						if (lab == null || lab.mineralAmount == 0)
+							labs.splice(j, 1);
+					}
+
+					if (labs.length == 0)
+						labDefinitions.splice(i, 1)
+					else
+						_.set(labDefinitions[i], "labs", labs);
+				}
+			}
+			_.set(Memory, ["rooms", rmColony, "lab_definitions"], labDefinitions);
+		}	
+
+		// Get labs able to process reactions (exclude labs defined to boost)
+		let labs = _.filter(Game["rooms"][rmColony].find(FIND_MY_STRUCTURES), s => { return s.structureType == "lab" 
+			&& _.filter(labDefinitions, def => { return _.get(def, "action") == "boost" && _.get(def, "lab") == s.id; }).length == 0 });
+		
+		// Not enough labs to support a reaction? Remove defined reactions, empty labs (if needed) and return
+		if (labDefinitions != null && labs.length < 3) {			
+			for (let i = labDefinitions.length - 1; i >= 0; i--) {
+				if (_.get(labDefinitions, [i, "action"]) == "reaction")
+					labDefinitions.splice(i, 1)
+			}
+
+			for (let i = 0; i < labs.length; i++) {
+				if (labs[i].mineralAmount > 0 && _.filter(labDefinitions, d => { return _.get(d, "action") == "empty" 
+						&& _.filter(_.get(d, "labs"), l => { return l == labs[i].id;}).length > 0 }).length == 0) {
+
+					labDefinitions.push({ action: "empty", labs: [labs[i].id] });
+				}			
+			}
+
+			_.set(Memory, ["rooms", rmColony, "lab_definitions"], labDefinitions);
+			return;
+		}
+
+		let terminal = _.get(Game, ["rooms", rmColony, "terminal"]);
+		if (terminal == null)
+			terminal = _.head(labs);
+
+		labs = _.sortBy(labs, lab => { return lab.pos.getRangeTo(terminal.pos.x, terminal.pos.y); });
+		let supply1 = _.get(labs, [0, "id"]);
+		let supply2 = _.get(labs, [1, "id"]);
+		let reactors = [];
+		for (let i = 2; i < labs.length; i++)
+			reactors.push(_.get(labs, [i, "id"]));
+
+		// Clear existing "reaction" actions before adding new ones
+		if (labDefinitions == null) 
+			labDefinitions = [];
+		else {
+			for (let i = labDefinitions.length - 1; i >= 0; i--) {
+				if (_.get(labDefinitions, [i, "action"]) == "reaction")
+					labDefinitions.splice(i, 1)
+			}
+		} 
+
+		labDefinitions.push({ action: "reaction", supply1: supply1, supply2: supply2, reactors: reactors });
+		_.set(Memory, ["rooms", rmColony, "lab_definitions"], labDefinitions);
+		console.log(`<font color=\"#A17BFF\">[Labs]</font> Labs defined for ${rmColony}.`);
+	},
+
+	runLabs: function(rmColony) {
+		/* Arguments for labDefinitions:
+
+			Memory["rooms"][rmColony]["lab_definitions"]
+
+			[ { action: "reaction", supply1: "5827cdeb16de9e4869377e4a", supply2: "5827f4b3a0ed8e9f6bf5ae3c",
+				reactors: [ "5827988a4f975a7d696dba90", "5828280b74d604b04955e2f6", "58283338cc371cf674426315", "5827fcc4d448f67249f48185",
+					"582825566948cb7d61593ab9", "58271f0e740746b259c029e9", "5827e49f0177f1ea2582a419" ] } ]);
+
 			{ action: "boost", mineral: "", lab: "", role: "", subrole: "" }
 			{ action: "reaction", amount: -1, mineral: "",
 			  supply1: "", supply2: "",
@@ -140,8 +240,12 @@ module.exports = {
 			{ action: "empty", labs: ["", "", ...] }
 		*/
 
-        for (let l in listLabs) {
-            let listing = listLabs[l];
+		if (Hive.isPulse_Labs()) {
+			this.assignReaction(rmColony);
+		}
+
+        for (let l in labDefinitions) {
+            let listing = labDefinitions[l];
              switch (listing["action"]) {
                 default:
                     break;
@@ -161,32 +265,26 @@ module.exports = {
 					break;
 
                 case "reaction":
-					if (Hive.isPulse_Labs()) {
-						this.assignReaction(rmColony);
-					}
-
                     let labSupply1 = Game.getObjectById(listing["supply1"]);
                     let labSupply2 = Game.getObjectById(listing["supply2"]);
 
 					if (labSupply1 == null && labSupply2 == null)
 						break;
 
-					let mineral = _.get(Memory, ["labs", "reactions", rmColony, "mineral"]);
+					let mineral = _.get(Memory, ["resources", "labs", "reactions", rmColony, "mineral"]);
 					if (mineral == null)
 						return;
 					
 					if (_.get(REACTIONS, [labSupply1.mineralType, labSupply2.mineralType]) != mineral)
 						return;
 
-					let amount = _.get(Memory, ["labs", "reactions", rmColony, "amount"], -1);
+					let amount = _.get(Memory, ["resources", "labs", "reactions", rmColony, "amount"], -1);
 					if (amount > 0 && Game.rooms[rmColony].store(mineral) >= amount) {
-						if (_.get(Memory, ["labs", "targets", mineral, "is_reagent"]))
-							delete Memory.labs.targets[mineral];
-						delete Memory.labs.reactions[rmColony];
+						if (_.get(Memory, ["resources", "labs", "targets", mineral, "is_reagent"]))
+							delete Memory["resources"]["labs"]["targets"][mineral];
+						delete Memory["resources"]["labs"]["reactions"][rmColony];
 						console.log(`<font color=\"#A17BFF\">[Labs]</font> ${rmColony} completed target for ${mineral}, re-assigning lab.`);
-
-						if (Hive.isPulse_Main())
-							this.assignReaction(rmColony);
+						delete Memory["hive"]["pulses"]["lab"];	
 						return;
 					}
 
@@ -201,7 +299,7 @@ module.exports = {
         }
 	},
 
-	createLabTasks: function(rmColony, listLabs) {
+	createLabTasks: function(rmColony) {
 		/* Terminal task priorities:
 		 * 2: emptying labs
 		 * 3: filling labs
@@ -210,9 +308,9 @@ module.exports = {
 		 * 6: emptying terminal
 		 */
 
-		for (let l in listLabs) {
+		for (let l in labDefinitions) {
 			var lab, storage;
-			let listing = listLabs[l];
+			let listing = labDefinitions[l];
 
 			switch (listing["action"]) {
 				default:
@@ -276,7 +374,7 @@ module.exports = {
 					storage = Game.rooms[rmColony].storage;
 					if (storage == null) break;
 
-					let mineral = _.get(Memory, ["labs", "reactions", rmColony, "mineral"]);
+					let mineral = _.get(Memory, ["resources", "labs", "reactions", rmColony, "mineral"]);
 					if (mineral == null)
 						return;
 
@@ -360,22 +458,49 @@ module.exports = {
 	runTerminal: function (rmColony) {
 		if (Game.rooms[rmColony].terminal != null && Game.rooms[rmColony].terminal.my) {
 
-			if (Memory["terminal_orders"] == null)
-				Memory["terminal_orders"] = new Object();
-			if (Memory["rooms"][rmColony]["stockpile"] == null)
-				Memory["rooms"][rmColony]["stockpile"] = new Object();
+			if (_.get(Memory, ["resources", "terminal_orders"]) == null)
+				_.set(Memory, ["resources", "terminal_orders"], new Object());
+			if (_.get(Memory, ["rooms", rmColony, "stockpile"]) == null)
+				_.set(Memory, ["rooms", rmColony, "stockpile"], new Object());
 
 			let shortage = {};
 			let room = Game.rooms[rmColony];
 			let storage = Game.rooms[rmColony].storage;
 			let terminal = Game.rooms[rmColony].terminal;
 
-			for (let res in Memory["rooms"][rmColony]["stockpile"]) {
-				shortage[res] = Memory["rooms"][rmColony]["stockpile"][res] - room.store(res);
+			// Add low energy level to room's stockpile (to prevent sending to other rooms)
+			let __Colony = require("util.colony");
+			let energy_shortage_level = __Colony.getLowStockpile(_.get(Game, ["rooms", rmColony, "controller", "level"]));
+			let energy_stockpile = _.get(Memory, ["rooms", rmColony, "stockpile", "energy"]);
+			if (energy_stockpile == null || energy_stockpile < energy_shortage_level) {				
+				_.set(Memory, ["rooms", rmColony, "stockpile", "energy"],
+					energy_stockpile == null ? energy_shortage_level : energy_stockpile + energy_shortage_level);
+			}
 
-				if (shortage[res] > 0) {
-					Memory["terminal_orders"][`${rmColony}-${res}`] = { room: rmColony, resource: res, amount: shortage[res], automated: true, priority: 2 };
+			// Create orders to request resources to meet per-room stockpile
+			for (let res in _.get(Memory, ["rooms", rmColony, "stockpile"])) {
+				shortage[res] = _.get(Memory, ["rooms", rmColony, "stockpile", res]) - room.store(res);
+
+				if (shortage[res] > 0)
+					_.set(Memory, ["resources", "terminal_orders", `${rmColony}-${res}`], 
+						{ room: rmColony, resource: res, amount: shortage[res], automated: true, priority: 2 });
+			}
+
+			// Create high priority order to fix critical shortage of energy in this room (and start early, aim high, include margins for error!)
+			let room_energy_level = _.get(storage, ["store", "energy"]) + _.get(terminal, ["store", "energy"]);
+			if (room_energy_level < (energy_shortage_level * 1.1)) {
+				let amount = Math.max((energy_shortage_level * 1.25) - room_energy_level, 1000);
+
+				if (amount > 0) {
+					// Prevent spamming "new energy order creted" if it's just modifying the amount on an existing order...
+					if (_.get(Memory, ["resources", "terminal_orders", `${rmColony}-energy_critical`]) == null)
+						console.log(`<font color=\"#DC00FF\">[Terminals]</font> Creating critical energy order for ${rmColony} for ${amount} energy.`);
+					_.set(Memory, ["resources", "terminal_orders", `${rmColony}-energy_critical`], 
+						{ room: rmColony, resource: "energy", amount: amount, automated: true, priority: 1 });
+					
 				}
+			} else {
+				delete Memory["resources"]["terminal_orders"][`${rmColony}-energy_critical`];
 			}
 
 			let filling = new Array();
@@ -393,10 +518,10 @@ module.exports = {
 		 *	5: filling energy for a market order
 		*/
 
-		for (let o in Memory["terminal_orders"])
-			Memory["terminal_orders"][o]["name"] = o;
+		for (let o in _.get(Memory, ["resources", "terminal_orders"]))
+			_.set(Memory, ["resources", "terminal_orders", o, "name"], o);
 
-		let orders = _.sortBy(Memory["terminal_orders"], "priority");
+		let orders = _.sortBy(_.get(Memory, ["resources", "terminal_orders"]), "priority");
 
 		for (let n in orders) {
 			let order = orders[n];
@@ -452,7 +577,7 @@ module.exports = {
 					} else {
 						console.log(`<font color=\"#00F0FF\">[Market]</font> No replacement market order found for ${o}; order deleted!`);
 
-						delete Memory["terminal_orders"][o];
+						delete Memory["resources"]["terminal_orders"][o];
 						return false;
 					}
 				}
@@ -491,6 +616,9 @@ module.exports = {
 				if ((res != "energy" && terminal.store["energy"] >= cost)
 						|| (res == "energy" && terminal.store["energy"] >= cost + amount)) {
 
+					if (terminal.cooldown > 0)
+						return false;				
+
 					let result = (order["market_id"] == null)
 						? terminal.send(res, amount, order["room"])
 						: Game.market.deal(order["market_id"], amount, rmColony);
@@ -499,14 +627,14 @@ module.exports = {
 						console.log(`<font color=\"#DC00FF\">[Terminals]</font> ${o}: ${amount} of ${res} sent, ${rmColony}`
 							+ ` -> ${order["room"]}`);
 
-						Memory["terminal_orders"][o]["amount"] -= amount;
-						if (Memory["terminal_orders"][o]["amount"] <= 0)
-							delete Memory["terminal_orders"][o];
+						Memory["resources"]["terminal_orders"][o]["amount"] -= amount;
+						if (_.get(Memory, ["resources", "terminal_orders", o, "amount"]) <= 0)
+							delete Memory["resources"]["terminal_orders"][o];
 
 						return true;
 
 					} else {
-						console.log(`<font color=\"#DC00FF\">[Terminals]</font> ${o}: failed to send , `
+						console.log(`<font color=\"#DC00FF\">[Terminals]</font> ${o}: failed to send, `
 							+ `${amount} of ${res} ${rmColony} -> ${order["room"]} (code: ${result})`);
 					}
 				} else {
@@ -521,8 +649,8 @@ module.exports = {
 							id: terminal.id, pos: terminal.pos, timer: 10, creeps: 8, priority: 5 });
 					} else if (res != "energy") {
 						shortage["energy"] = (shortage["energy"] == null) ? cost : shortage["energy"] + cost;
-						Memory["terminal_orders"][`${rmColony}-energy`] =
-							{ room: rmColony, resource: "energy", amount: cost, automated: true, priority: order["market_id"] == null ? 3 : 5 };
+						_.set(Memory, ["resources", "terminal_orders", `${rmColony}-energy`],
+							{ room: rmColony, resource: "energy", amount: cost, automated: true, priority: order["market_id"] == null ? 3 : 5 });
 					}
 				}
 			} else if (storage != null && storage.store[res] != null) {
@@ -550,11 +678,14 @@ module.exports = {
 
 		let o = order["name"];
 		let res = order["resource"];
-		let amount = Math.max(100, Math.min(Memory["terminal_orders"][o]["amount"], 2000));
+		let amount = Math.max(100, Math.min(_.get(Memory, ["resources", "terminal_orders", o, "amount"]), 2000));
 		let cost = Game.market.calcTransactionCost(amount, rmColony, order["room"]);
 
 		if (terminal.store["energy"] != null && terminal.store["energy"] > cost) {
 			filling.push("energy");
+
+			if (terminal.cooldown > 0)
+				return false;
 
 			let result = Game.market.deal(order["market_id"], amount, rmColony);
 
@@ -562,9 +693,9 @@ module.exports = {
 				console.log(`<font color=\"#DC00FF\">[Terminals]</font> ${o}: ${amount} of ${res} received, ${order["room"]}`
 					+ ` -> ${rmColony} `);
 
-				Memory["terminal_orders"][o]["amount"] -= amount;
-				if (Memory["terminal_orders"][o]["amount"] <= 0)
-					delete Memory["terminal_orders"][o];
+				Memory["resources"]["terminal_orders"][o]["amount"] -= amount;
+				if (_.get(Memory, ["resources", "terminal_orders", o, "amount"]) <= 0)
+					delete Memory["resources"]["terminal_orders"][o];
 
 				return true;
 			} else {
@@ -584,7 +715,8 @@ module.exports = {
 					type: "industry", subtype: "deposit", resource: "energy",
 					id: terminal.id, pos: terminal.pos, timer: 10, creeps: 8, priority: 5 });
 			} else if (res != "energy") {
-				Memory["terminal_orders"][`${rmColony}-energy`] = { room: rmColony, resource: "energy", amount: cost, automated: true, priority: 5 };
+				_.set(Memory, ["resources", "terminal_orders", `${rmColony}-energy`], 
+					{ room: rmColony, resource: "energy", amount: cost, automated: true, priority: 5 });
 			}
 		}
 

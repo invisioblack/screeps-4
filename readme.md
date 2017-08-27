@@ -4,35 +4,63 @@ My code for my Screeps account- feel free to use, copy, etc. No guarantee that t
 
 ### main.js
 
-I wrote the codebase so that the *only* editing that needs to be done is in main.js. You can define your colonies, mining sites, terminal and lab setups, rooms that you want reserved, rooms that you want a military presence in- all of that is defined in main.js using a Sites.Colony(), defined as `function(rmColony, spawnDistance, listPopulation, listLinks)`. For example:
+**The _goal_ of this code-base is that all interaction with the player will be via Memory, not hard-coded... this is a work in progress!** This is the next step for this codebase, since it originally pulled all definitions from a custom "main.js"... well, now things are a bit more automated... but some advanced functions still need to be hard-coded into main.js as I work on porting them to Memory...
 
-```
-Sites.Colony("W18S43", ["W19S42"],
-	{ worker:   {level: 7, amount: 1},
-	  repairer: {level: 5, amount: 1} },
-	[ {id: "57a2465268244ab107a96d5e", role: "send"},
-	  {id: "57a24a31e620955e29e63e27", role: "send"},
-	  {id: "57a24f9cacbffcb869dc9d21", role: "receive"},
-	  {id: "57a25c61958cffd536325056", role: "receive"} ] );
-```
+#### Colonies 
+Rooms that you own a controller in are automatically run with a preset population of creeps adjusted based on room controller level (RCL) and whether the colony is being assisted in spawning from another, adjacent room. Colony populations are automatically spawned (so long as there is a spawn present! or a room assisting in spawning!) and creeps get to work on construction sites and upgrading the room controller.
 
-This example shows the definition of a colony at room W18S43 that will spawn its creeps at either W18S43 (the colony) or W19S42 (its neighbor), with a goal population of a worker and a repairer of different levels (body levels are defined in util.creep.js), and with 4 links (2 of which send energy, and 2 of which receive).
+#### In-Colony Mining (Local Mining)
+Just like colonies are automatically run and populated with a preset population, so is local mining. Miners will spawn and mine based on room level (RCL)... low level colonies utilize miners (all-in-one mining creeps) and mid-level and high-level rooms utilize burrowers and carriers (seperate creeps for mining the source then carrying the energy to storage).
 
-Each colony needs to mine, so then there is a source mining site which, depending on the arguments, can be an in-colony mining site, a remote mining site, mineral extraction, or mining of rooms with source keepers. This uses Sites.Mining() defined as `function(rmColony, rmHarvest, spawnDistance, hasKeepers, listPopulation, listRoute)`:
+### What You Need To Do
 
-```
-Sites.Mining("W13S41", "W12S41", null, false,
-	{ burrower:  {level: 4, amount: 1},
-	  carrier:   {level: 4, amount: 3},
-	  multirole: {level: 4, amount: 1},
-	  reserver:  {level: 4, amount: 1} } );
-```
-			  
-This example shows a remote mining site one room away from its base colony, which will only spawn workers from the colony (since listSpawnRooms is null), whose workers don't keep any lookout for source keepers (saving CPU, but non-responsive to invaders!). The goal population is a burrower (literally burrows a pile of energy onto the ground), a carrier (which carries the energy from the pile to the colony), a multi-role creep (builds structures, repairs roads, and attacks invaders!), and a reserver (because a reserved room controller increases the maximum amount of energy in a source!).
+#### Construction Sites: Set Origin Coordinates (esp. For Colony #1)
+
+**This codebase will automate the layout and construction of your base within your colony, based on different pre-fabricated base layouts that are programmed in blueprint.layouts.js and can be visualized in Excel format in base\_layouts/base\_layouts.xlsc!!! Layouts have origins of 0,0 being the top left spawn, not including the defensive walls/buffer space).** Every 200-500 ticks, up to 5 construction sites will be placed automatically. Since your first colony is started via the GUI, for automated base creation, you will need to set the origin point for the top left of your colony like so (and you can set the layout as well, as "default\_horizontal", "default\_vertical", or "default\_compact"):
+
+`blueprint.set_layout(rmName, originX, originY, layoutName)`
+
+If your colony cannot be automatically built in its entirety due to walls being in the way, you can still manually place construction sites for the structures that are blocked (e.g. by terrain), placing them elsewhere. However, if they are destroyed, they will not automatically be rebuilt. For this reason, **see the default base layout in base\_layouts/base\_layouts.xlsx** and try to find adequate space if possible. 
+
+Links will automatically be built near sources and the room controller, and will facilitate feeding energy to upgraders.
+
+To manually block off areas from being constructed (such as if the code is trying to build a wall up against a terrain wall, which is a useless waste of energy), you can set off blocked areas defined by start and end (x, y) coordinates. The blocked areas are defined as objects in a list, so you can add multiple blocked areas per room by adding to the list array. You can set them like this:
+
+`blueprint.block_area(rmName, startX, startY, endX, endY)`
+
+If you must manually build structures, you can run the following command to see what structures are available to be built in each colony:
+
+`log.can_build();`
+
+#### Colonize New Rooms
+
+When you are ready to expand to a new room (create a new "colony"), you can use a console command to commit a colonization request to Memory, which will automatically spawn a colonizer (as long as the sending colony has enough energy and extensions, at least RCL 4), and the colonizer will move to the room and claim the controller. If your colonizer will need to travel through 3+ rooms to get there, you may want to include a list\_route to make sure the colonizer takes the quickest route and to avoid pathfinding problems (list_route is a list of rooms in order that you want the creep to travel through, including the room\_from, room\_to, and everything in-between, e.g. ["W1N1", "W1N2", "W2N2", "W3N2"] ... but list\_route is optional). To place a colonization request:
+
+`colonize("room_from", "room_target", {origin: {x: base_origin_x, y: base_origin_y}, name: "default_horizontal"}, [list_route]);`
+
+Once the colonizer claims the new controller, the code-base will remove the colonization request from Memory and start running the new room as a colony _assisted by the colony that sent the colonizer, using the same route as the colonizer_. It will utilize the layout origin for automatically setting construction sites for your base as the colony progresses. You can either set a specific room layout via layout_name, or leave it as null to use the default horizontal layout. If you want to modify or add rooms to assist in the spawning burden, you can modify the spawn\_assist.rooms field for a colony like this:
+
+`spawn_assist(rmToAssist, [listRooms], [listRoute])`
+
+#### Set Custom Room Functions
+
+Higher level functions for colonies and spawning are available, such as spawning from an adjacent room (spawn\_assist.rooms), routing creeps through a complex series of rooms to assist another colony with spawning (spawn\_assist.route). For more information on this, please read the comments placed in main.js- they offer more instruction on how to set the parameters in your Memory.
+
+Note: If you set a custom room population (as shown in main.js' comments), you _must set the entire room's population_ including mining, industry, etc; if you only include colony workers, you won't spawn any miners to fill the spawn and extensions!
+
+#### Remote Mining
+
+Although local mining is run automatically in any room you own a controller, remote mining still needs to be defined via a console command. You can do that like so:
+
+`remote_mining(colony_room, room_to_harvest);`
+
+and it's pretty much that simple. The creep population for the remote mining is automatically chosen, but more complex operations are definitely possible and a few fields are read from Memory, including adjacent room assistance with spawning, spawning of soldiers to accompany miners in rooms that have source keepers, and custom populations for the mining operation, all set through Memory. For example, if you will be mining a room with source keepers and assist in spawning the creeps from an adjacent room, your command would look like this:
+
+`remote_mining(rmHarvest, rmColony, hasKeepers, [listRoute], [listSpawnAssistRooms], [listPopulation]);`
 
 ### Spawning and Creep "Levels"
 
-Using the listSpawnRooms argument, the codebase iterates through each spawn and attempts to spawn creeps in order of priority, and within either the colony or any rooms on listSpawnRooms. This allows a brand new colony to have its creeps spawned from an existing colony several rooms away, or allows multiple established colonies to share the burden of spawning if one colony lacks the energy.
+Using the spawn\_assist.rooms Memory fields that can be custom set, the codebase iterates through each spawn and attempts to spawn creeps in order of priority, and within either the colony or any rooms on spawn\_assist.rooms list. This allows a brand new colony to have its creeps spawned from an existing colony several rooms away, or allows multiple established colonies to share the burden of spawning if one colony lacks the energy.
 
 For resource management- to save energy and spawn time- I equated a room's control level ("RCL") with creep "levels" to make sense of spawning. A room may be RCL 6 but only need a level 4 repairer to keep up with the work of repairing structures. If every creep, miner, and remote miner for an RCL 6 room (with 1 spawn) were to be at creep level 6, the spawn may not be able to keep up with the population demand!
 
@@ -50,48 +78,57 @@ Though the task system helps creeps stay organized as a group, iterating every r
 
 ### Industry
 
+#### Links
+
+Links are automatically built based on the defined room layout and their functionality is automatically defined. Links built in different places as they are unlocked as your room's controller level (RCL) increases. Initially, links direct the flow of energy from sources to the room controller for upgrading. At higher RCL, links are built near the room's storage to direct energy for stockpiling as well.
+
 #### Labs
 
-So you have some minerals and want your labs to process them? Or boost your creeps? In main.js, you can define a Sites.Industry like so:
+So you have some minerals and want your labs to process them? Or boost your creeps? ... well rooms of RCL 6 and above automatically will spawn a courier that will run minerals to labs and terminals for managing reactions. The codebase actually lets you specify in Memory what your goal minerals are, and it will automatically set up reactions in your labs. Note: this is an empire-wide process, _not_ specific to each room- couriers in all of your rooms will start shipping reagents via terminals to different rooms to fill labs to run reactions, automatically!! There is no need for you to manually move minerals except if you want to send them to your friends.
 
-```
-Sites.Industry("W18S43", 2,
-	{ courier:   {level: 5, amount: 1} },            
-	[ { action: "reaction", mineral: "G", amount: 25000,
-		supply1: "57da4f4df77673f57f674b8e", supply2: "57da17db81f808d96870b7fb",
-		reactors: [ "57d97c52cfda43d45247083e", "57d9cf9924d28b4e75fa36b0"] } ]);
-```
+To set reaction targets, "mineral" is the mineral's abbreviation, "amount" is the amount of this mineral that you'd like to generate, and "priority" is any number for you to order your reaction priorities, with 1 being highest priority and 100 being lowest priority: 
 
-Which specifies that in room W18S43, we want one courier (that can be spawned up to 2 rooms away). This courier will do all tasks that are automatically generated to meet the needs of the rest of the Sites.Industry() statement. We also want our labs (the list of reactors) to combine the minerals in the supply labs (supply1, supply2) to make the target mineral (G, which requires UL + ZK), until the room contains up to 25000 in storage.
+`resources.lab_target(mineral, amount, priority);`
 
 #### Terminals
 
-Once you have a terminal built and have a Sites.Industry() in your main.js for that room, the code and the courier begin to automatically do a lot of functions for you. For example, if you define a reaction or a boost, the code will automatically request other rooms that also have a Sites.Industry() to load any excess minerals used for the reaction, and send it over! Also, if you have any rooms with an excess of energy, you can place
+Once you have reach RCL 6 a courier will spawn and begin to automatically do a lot of functions for you. For example, if you set up mineral reactions, the code will automatically request other rooms with terminals to load any excess minerals used for the reaction, and send it over! Also, if any rooms have an excess of energy, you can set the "cap_amount" so that when a room reaches the energy cap, it will start to overflow energy into other rooms:
 
-`Hive.moveExcessEnergy(200000);`
+`resources.overflow_cap(cap_amount)`
 
-into your main.js, and any rooms with more energy than the limit (in this example: 200,000) will start automatically loading and sending the energy to a terminal in a room with the least amount of energy, balancing out the amount of energy in your rooms. Terminals in a room with a Sites.Industry() also process terminal orders, which can be manually entered as such:
+and any rooms with more energy than the limit will start automatically loading and sending the energy to a terminal in a room with the least amount of energy, balancing out the amount of energy in your empire. 
 
-* For internal transfers (among your own rooms):
+The codebase also will automatically off-load excess minerals and energy, selling them to the market to the highest bidder, but only if you enter manually into Memory the limit at which you want excess minerals to be sold. This is great for selling excess basic minerals, and you can always manually enter market trades for minerals that you don't include in automatic sales. To set up automatic market selling, you can use the following command on the console, where "resource" is the mineral abbreviation (or "energy"!), and "cap_amount" is the amount at which it will start overflowing that resource onto the market:
 
-```
-Memory["terminal_orders"][""] = { room: "", resource: "", amount: , from: "", priority: 1};
-```
+`resources.market_cap(resource, cap_amount)`
+
+Terminals also process manually entered terminal orders, which you can use to send resources to friends, by using the following manual entries in the console:
+
+* For internal transfers (among your own rooms or to your friends or private trades):
+
+`resources.send(order_name, room_from, room_to, resource, amount)`
 	
-* For market trading (fulfilling existing orders from other players):
+* For manual market trading (fulfilling existing buy/sell orders from other players):
 
 ```
-Memory["terminal_orders"][""] = { market_id: "", amount: , from: "", priority: 4};
-Memory["terminal_orders"][""] = { market_id: "", amount: , to: "", priority: 4};
+resources.market_sell(order_name, market_order_id, room_from, amount)
+resources.market_buy(order_name, market_order_id, room_to, amount)
 ```
 
-and Sites.Industry() will automatically create tasks for the courier to load/unload the terminal, and send/receive minerals and energy to fulfill all terminal orders!
+and your courier will to load/unload the terminal, and send/receive minerals and energy to fulfill all terminal orders!
 
 ### Attack & Defense
 
 #### Allies
 
-Don't forget to define your allies in main.js, but be careful who you add! Your list of allies is a group of players whose creeps will be able to move through your rooms and interact with your creeps and structures without setting off your defenses.
+Don't forget to define your allies in Memory, but be careful who you add! Your list of allies is a group of players whose creeps will be able to move through your rooms and interact with your creeps and structures without setting off your defenses. Allies can be set with the following commands:
+
+```
+allies.add(ally)
+allies.add_list([ally1, ally2, ...])
+allies.remove(ally)
+allies.clear()
+```
 
 #### Active Defenses
 
@@ -101,26 +138,30 @@ There are several basic automatic defenses built into the code. Towers will choo
 
 Passive defenses (walls and ramparts) are also an integral part of your room's defenses. When you construct a wall or rampart and have a worker or repairer available with energy, it is automatically set to build and repair your walls to a minimum "critical" hitpoint level, and then- as available- repair them to a target "maintenance" hitpoint level. The amount of hitpoints that the code will automatically aim for scales depending on your room's controller level (RCL), from 10K hitpoints at RCL1 to 1M hitpoints at RCL8. 
 
-You can also specify the target hitpoint goal for a specific tile or wall or rampart by adding a value to its memory setting at `Memory.rooms[rmName].structures[${s.structureType}-${s.id}].targetHits`. An example of a quick way to set a room's walls (e.g. W18S43, all walls and ramparts along x == 2) to a custom target hitpoint goal (e.g. 5M)- all via the console- would be:
+You can also specify the target hitpoint goal for a specific tile or wall or rampart by adding a value to its memory setting. Since this operation can get complex, there is no simple console command for it, but an example of a quick way to set a room's walls (all walls and ramparts along x == ?) to a custom target hitpoint goal- all via the console- would be by modifying Memory directly, with the fields surrounded by asterisks (*) needing to be set by you... and you can change this around to suit your needs!:
 
 ```
-_.each(Game.rooms.W18S43.find(FIND_STRUCTURES, { filter: (s) => { return s.pos.x == 2 && (s.structureType == "constructedWall" || s.structureType == "rampart"); } }), s => { _.set(Memory, ["rooms", s.pos.roomName, "structures", `${s.structureType}-${s.id}`, "targetHits"], 5000000); });
+_.each(_.filter(Game.rooms.*room_name*.find(FIND_STRUCTURES)
+    s => { return s.pos.x == *x_coordinate* && (s.structureType == "*structure_type*"; })), 
+    s => { _.set(Memory, ["rooms", s.pos.roomName, "structures", `${s.structureType}-${s.id}`, "targetHits"], *hitpoint_amount*); });
 ```
 
 #### Invading a Room
 
-There is code written to launch an attack on another room- simply add a Sites.Invasion() to your main.js with the proper arguments (found in sites.invasion.js) and the code will spawn the requested army, rally at a designated spot, move in once assembled, and attack a pre-defined list of targets or automatically attack enemy structures in order of importance! Useful for taking somebody elses' rooms...
+Invading another room is now possibly by setting an invasion request into Memory using a console command like so:
+
+`invade("room_from", "room_to_invade", occupy?_true_false, ["list_spawn_assist_rooms"], [{list_army_population}], ["list_target_gameIDs"], new RoomPosition(rally_point_x, rally_point_y, "rally_point_room_name"), ["list_route_rooms"])`
+
+After all invading creeps are killed- either by defenses or by destroying the room then timing out, the invasion will be deemed over (in the near future, I will be working on victory conditions and repeated assaults...). If "occupy" is set to true, then an occupation request will be placed using the same army as the invading force. See "Occupying a Room" for more details.
 
 #### Occupying a Room
 
-Rarely used but useful when needed, you can keep a continuous occupation of a room by adding a Sites.Occupation() to your main.js with the proper arguments (found in sites.occupation.js). This is useful for when you want to clear out structures in a room from a previous player (before claiming it yourself!), or if you want to disrupt an enemy's supply route or remote mining operations, sieging their room in preperation for an attack!
+Rarely used but useful when needed, you can keep a continuous occupation of a room by adding an occupation\_request to Memory. This is useful if you destroy a player's base and want to keep them from rebuilding, clearing out structures in a room from a previous player, or disrupting an enemy's supply route or remote mining operations, sieging their room in preperation for an attack! Occupation requests can be placed in memory with the following command:
 
+`occupy("room_from", "room_to_occupy, ["list_spawn_assist_rooms"], [{list_army_population}], ["list_target_gameIDs"], ["list_route_rooms"])"`
 
+### Console Commands
 
+There are a number of commands that can be run from the console that are part of the codebase and assist in managing your Screeps empire. These range from logs to show your resource amounts, to using a "blueprint" feature that saves your room layout (using flags) and will automatically rebuild after an attack, along with a CPU profiler that can show you which functions are using the most CPU. For a full list of console commands, simply go to the console and type:
 
-
-
-
-
-
-
+`commands()`

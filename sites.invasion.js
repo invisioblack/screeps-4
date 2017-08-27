@@ -5,10 +5,19 @@ let _CPU = require("util.cpu");
 
 module.exports = {
 	
-	Run: function(rmColony, rmInvade, listSpawnRooms, listArmy, listTargets, posRally, listRoute) {
+	Run: function(rmColony, rmInvade) {
 		if (_.get(Memory, ["rooms", rmColony, `invasion_${rmInvade}`]) == null)
 			_.set(Memory, ["rooms", rmColony, `invasion_${rmInvade}`], { state: "spawning", time: Game.time });
 		
+		_CPU.Start(rmColony, "Invade-init");
+		toOccupy = _.get(Memory, ["sites", "invasion", rmInvade, "occupy"]);
+		listSpawnRooms = _.get(Memory, ["sites", "invasion", rmInvade, "spawn_assist"]);
+		listArmy = _.get(Memory, ["sites", "invasion", rmInvade, "army"]);
+		listTargets = _.get(Memory, ["sites", "invasion", rmInvade, "targets"]);
+		posRally = _.get(Memory, ["sites", "invasion", rmInvade, "rally_point"]);
+		listRoute = _.get(Memory, ["sites", "invasion", rmInvade, "route"]);
+		_CPU.End(rmColony, "Invade-init");
+
 		_CPU.Start(rmColony, `Invade-${rmInvade}-listCreeps`);
 		let listCreeps = _.filter(Game.creeps, c => c.memory.room == rmInvade && c.memory.colony == rmColony);
 		_CPU.End(rmColony, `Invade-${rmInvade}-listCreeps`);
@@ -20,7 +29,7 @@ module.exports = {
 		}
 		
 		_CPU.Start(rmColony, `Invade-${rmInvade}-runCreeps`);
-		this.runCreeps(rmColony, rmInvade, listCreeps, listTargets, posRally, listRoute);
+		this.runCreeps(rmColony, rmInvade, toOccupy, listArmy, listCreeps, listTargets, posRally, listRoute);
 		_CPU.End(rmColony, `Invade-${rmInvade}-runCreeps`);
 	},
 	
@@ -39,16 +48,16 @@ module.exports = {
 			}
 			
 			if (listArmy["soldier"] != null && lSoldier.length < listArmy["soldier"]["amount"]) {				
-				Memory["spawn_requests"].push({ room: rmColony, listRooms: listSpawnRooms, priority: 0, level: listArmy["soldier"]["level"], 
+				Memory["hive"]["spawn_requests"].push({ room: rmColony, listRooms: listSpawnRooms, priority: 0, level: listArmy["soldier"]["level"], 
 					scale_level: listArmy["soldier"] == null ? true : listArmy["soldier"]["scale_level"],
 					body: (listArmy["soldier"]["body"] || "soldier"), 
 					name: null, args: {role: "soldier", room: rmInvade, colony: rmColony} });
 			} else if (listArmy["archer"] != null && lArcher.length < listArmy["archer"]["amount"]) {				
-				Memory["spawn_requests"].push({ room: rmColony, listRooms: listSpawnRooms, priority: 0, level: listArmy["archer"]["level"], 
+				Memory["hive"]["spawn_requests"].push({ room: rmColony, listRooms: listSpawnRooms, priority: 0, level: listArmy["archer"]["level"], 
 					scale_level: listArmy["archer"] == null ? true : listArmy["archer"]["scale_level"],
 					body: "archer", name: null, args: {role: "archer", room: rmInvade, colony: rmColony} });
 			} else if (listArmy["healer"] != null && lHealer.length < listArmy["healer"]["amount"]) {
-				Memory["spawn_requests"].push({ room: rmColony, listRooms: listSpawnRooms, priority: 0, level: listArmy["healer"]["level"], 
+				Memory["hive"]["spawn_requests"].push({ room: rmColony, listRooms: listSpawnRooms, priority: 0, level: listArmy["healer"]["level"], 
 					scale_level: listArmy["healer"] == null ? true : listArmy["healer"]["scale_level"],
 					body: "healer", name: null, args: {role: "healer", room: rmInvade, colony: rmColony} });
 			} else if (memory.state == "spawning") {
@@ -57,7 +66,7 @@ module.exports = {
 		}
 	},
 	
-	runCreeps: function(rmColony, rmInvade, listCreeps, listTargets, posRally, listRoute) {
+	runCreeps: function(rmColony, rmInvade, toOccupy, listArmy, listCreeps, listTargets, posRally, listRoute) {
 		let memory = _.get(Memory, ["rooms", rmColony, `invasion_${rmInvade}`]);
 		let rallyRange = 5;
 		
@@ -89,7 +98,7 @@ module.exports = {
 							creep.moveTo(posRally);
 						else {
 							let hostile = _.head(creep.pos.findInRange(FIND_HOSTILE_CREEPS, 3, 
-								{ filter: (c) => { return Memory["allies"].indexOf(c.owner.username) < 0; }}));
+								{ filter: (c) => { return c.isHostile(); }}));
 							if (hostile != null) {
 								creep.rangedAttack(hostile);
 								creep.attack(hostile);								
@@ -134,8 +143,15 @@ module.exports = {
 				
 				return;
 				
-			case "complete":				
-				_.set(Memory, ["rooms", rmColony, `invasion_${rmInvade}`], null);				
+			case "complete":
+				_.set(Memory, ["rooms", rmColony, `invasion_${rmInvade}`], null);
+				_.set(Memory, ["sites", "invasion", rmInvade], null);
+
+				if (toOccupy == true) {
+					_.set(Memory, ["sites", "occupation", rmTarget], { from: rmColony, target: rmInvade,
+						spawn_assist: listSpawnRooms, army: listArmy, targets: listTargets, route: listRoute });
+				}
+				
 				return;
 		}		
 	}

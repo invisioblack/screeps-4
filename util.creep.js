@@ -112,6 +112,19 @@ module.exports = {
                 } else { return; }
             }
 
+            case "sign": {
+                let controller = Game.getObjectById(creep.memory.task["id"]);
+                let message = creep.memory.task["message"];
+                let result = creep.signController(controller, message);
+                if (result == ERR_NOT_IN_RANGE) {
+                    creep.moveTo(controller, {reusePath: Hive.moveReusePath()});
+                    return;
+                } else if (result != OK) {
+                    this.finishedTask(creep);
+                    return;
+                } else { return; }
+            }
+
             case "repair": {
                 let structure = Game.getObjectById(creep.memory.task["id"]);
                 let result = creep.repair(structure);
@@ -214,52 +227,19 @@ module.exports = {
 
     moveFrom: function(creep, target) {
         let tgtDir = creep.pos.getDirectionTo(target);
-        let moveDir, x, y;
+        let moveDir;
 
         switch (tgtDir) {
-            case TOP:
-				moveDir = BOTTOM;
-				x = 0; y = 1;
-				break;
-
-			case TOP_RIGHT:
-				moveDir = BOTTOM_LEFT;
-				x = -1; y = 1;
-				break;
-
-			case RIGHT:
-				moveDir = LEFT;
-				x = -1; y = 0;
-				break;
-
-			case BOTTOM_RIGHT:
-				moveDir = TOP_LEFT;
-				x = -1; y = -1;
-				break;
-
-			case BOTTOM:
-				moveDir = TOP;
-				x = 0; y = -1;
-				break;
-
-			case BOTTOM_LEFT:
-				moveDir = TOP_RIGHT;
-				x = 1; y = -1;
-				break;
-
-			case LEFT:
-				moveDir = RIGHT;
-				x = 1; y = 0;
-				break;
-
-			case TOP_LEFT:
-				moveDir = BOTTOM_RIGHT;
-				x = 1; y = 1;
-				break;
+            default:
+            case TOP:           moveDir = BOTTOM;       break;
+			case TOP_RIGHT:     moveDir = BOTTOM_LEFT;  break;
+			case RIGHT:         moveDir = LEFT;         break;
+			case BOTTOM_RIGHT:  moveDir = TOP_LEFT;     break;
+			case BOTTOM:        moveDir = TOP;          break;
+			case BOTTOM_LEFT:   moveDir = TOP_RIGHT;    break;
+			case LEFT:          moveDir = RIGHT;        break;
+			case TOP_LEFT:      moveDir = BOTTOM_RIGHT; break;
         }
-
-		if (new RoomPosition(creep.pos.x + x, creep.pos.y + y, creep.pos.roomName).lookFor("terrain") == "wall")
-			moveDir = Math.floor(Math.random() * 8) + 1;
 
         return creep.move(moveDir);
     },

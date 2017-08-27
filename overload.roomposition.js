@@ -1,4 +1,7 @@
 RoomPosition.prototype.isWalkable = function isWalkable() {
+	if (this.x < 0 || this.x > 49 || this.y < 0 || this.y > 49)
+		return false;
+	
 	let look = this.look();
 	
 	let terrain = _.head(_.filter(look, l => l.type == "terrain"))["terrain"];
@@ -14,6 +17,15 @@ RoomPosition.prototype.isWalkable = function isWalkable() {
 	return true;
 };
 
+RoomPosition.prototype.inRangeToListTargets = function inRangeToListTargets(listTargets, range) {
+	for (let i = 0; i < listTargets.length; i++) {
+		if (this.getRangeTo(listTargets[i].pos.x, listTargets[i].pos.y) < range)
+			return true;
+	}
+
+	return false;
+}
+
 RoomPosition.prototype.getAccessAmount = function getAccessAmount() {
 	let access = 0;
 	
@@ -28,3 +40,43 @@ RoomPosition.prototype.getAccessAmount = function getAccessAmount() {
 
 	return access;
 };
+
+RoomPosition.prototype.getOpenTile_Adjacent = function getOpenTile_Adjacent() {
+	return (this.getOpenTile_Range(1));
+}
+
+RoomPosition.prototype.getOpenTile_Range = function getOpenTile_Range(range) {
+	for (let x = -range; x <= range; x++) {
+		for (let y = -range; y <= range; y++) {
+			let newPos = new RoomPosition(this.x + x, this.y + y, this.roomName);
+
+			if (newPos.x <= 1 || newPos.x >= 48 || newPos.y <= 1 || newPos.y >= 48)
+				continue;
+
+			if (newPos.lookFor("structure").length == 0 && newPos.lookFor("terrain") != "wall") {
+				return newPos;
+			}
+		}
+	}
+
+	return null;
+}
+
+RoomPosition.prototype.getOpenTile_Path = function getOpenTile_Path(range) {
+	for (let x = -range; x <= range; x++) {
+		for (let y = -range; y <= range; y++) {
+			let newPos = new RoomPosition(this.x + x, this.y + y, this.roomName);
+
+			if (newPos.x <= 1 || newPos.x >= 48 || newPos.y <= 1 || newPos.y >= 48)
+				continue;
+
+			if (newPos.lookFor("structure").length == 0 && newPos.lookFor("terrain") != "wall") {
+				let path = this.findPathTo(newPos.x, newPos.y, {maxOps: 200, ignoreCreeps: true, ignoreRoads: true});
+				if (path.length <= 2)
+					return newPos;
+			}
+		}
+	}
+
+	return null;
+}

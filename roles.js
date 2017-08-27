@@ -6,12 +6,12 @@ module.exports = {
     Worker: function(creep, isSafe) {
         let hostile = (isSafe == true)
 			? _.head(creep.pos.findInRange(FIND_HOSTILE_CREEPS, 6, { filter:
-				c => { return Memory["allies"].indexOf(c.owner.username) < 0; }}))
+				c => { return c.isHostile(); }}))
 			: null;
 
 		if (hostile == null) {
 			if (creep.memory.state == "refueling") {
-				if (_.sum(creep.carry) >= creep.carryCapacity * 0.9) {
+				if (_.sum(creep.carry) == creep.carryCapacity) {
 					creep.memory.state = "working";
 					Tasks.returnTask(creep);
 					return;
@@ -50,12 +50,12 @@ module.exports = {
     Mining: function(creep, isSafe) {
 		let hostile = (isSafe == true)
 			? _.head(creep.pos.findInRange(FIND_HOSTILE_CREEPS, 6, { filter:
-				c => { return Memory["allies"].indexOf(c.owner.username) < 0; }}))
+				c => { return c.isHostile(); }}))
 			: null;
 
 		if (hostile == null) {
 			if (creep.memory.state == "refueling") {
-				if (creep.carryCapacity > 0 && _.sum(creep.carry) >= creep.carryCapacity * 0.9) {
+				if (creep.carryCapacity > 0 && _.sum(creep.carry) == creep.carryCapacity) {
 					creep.memory.state = "delivering";
 					Tasks.returnTask(creep);
 					return;
@@ -129,7 +129,7 @@ module.exports = {
     Extracter: function(creep, isSafe) {
 		let hostile = (isSafe == true)
 			? _.head(creep.pos.findInRange(FIND_HOSTILE_CREEPS, 6, { filter:
-				c => { return Memory["allies"].indexOf(c.owner.username) < 0; }}))
+				c => { return c.isHostile(); }}))
 			: null;
 
 		if (hostile == null) {
@@ -179,12 +179,48 @@ module.exports = {
 			creep.moveTo(creep.room.controller)
 			return;
 		} else if (result == OK) {
+
+			if (Game.time % 50 == 0) {
+				let room_sign = _.get(Memory, ["hive", "signs", creep.room.name]);
+				let default_sign = _.get(Memory, ["hive", "signs", "default"]);
+				if (room_sign != null && _.get(creep, ["room", "controller", "sign", "text"]) != room_sign)
+					creep.signController(creep.room.controller, room_sign);
+				else if (room_sign == null && default_sign != null && _.get(creep, ["room", "controller", "sign", "text"]) != default_sign)
+					creep.signController(creep.room.controller, default_sign);
+			}
+
 			if (Game.time % 5 == 0) {  // Don't park next to a source (and possibly block it!)
 				let sources = creep.pos.findInRange(FIND_SOURCES, 1);
 				if (sources != null && sources.length > 0) {
 					let __creep = require("util.creep");
 					__creep.moveFrom(creep, sources[0]);
 				}
+			}
+			return;
+		}
+	},
+
+	Colonizer: function(creep) {
+        if (creep.memory.room != null && creep.room.name != creep.memory.room) {
+            _Creep.moveToRoom(creep, creep.memory.room, true);
+            return;
+        }
+
+		let result = creep.claimController(creep.room.controller);
+		if (result == ERR_NOT_IN_RANGE) {
+			creep.moveTo(creep.room.controller)
+			return;
+		} else {
+			let request = _.get(Memory, ["sites", "colonization", creep.memory.room]);			
+			if (_.get(request, ["target"]) == creep.room.name && creep.room.controller.my) {
+				delete Memory["sites"]["colonization"][creep.room.name];
+				_.set(Memory, ["rooms", creep.room.name, "spawn_assist", "rooms"], [_.get(request, ["from"])]);
+				_.set(Memory, ["rooms", creep.room.name, "spawn_assist", "route"], _.get(request, ["listRoute"]));
+				_.set(Memory, ["rooms", creep.room.name, "layout"], _.get(request, "layout"));
+				_.set(Memory, ["hive", "pulses", "blueprint", "request"], creep.room.name);
+				creep.suicide();
+			} else if (result != OK) {
+				console.log(`<font color=\"#F0FF00\">[Colonization]</font> ${creep.name} unable to colonize ${_.get(request, ["target"])}; error ${result}`);
 			}
 			return;
 		}
@@ -205,7 +241,7 @@ module.exports = {
 
 		if (creep.memory.room != null && creep.room.name != creep.memory.room
 				&& creep.memory.target == null) {	// Prevent room edge fighting from breaking logic...
-			_Creep.moveToRoom(creep, creep.memory.room);
+			_Creep.moveToRoom(creep, creep.memory.room, true);
 			return;
 		}
 		
@@ -278,7 +314,7 @@ module.exports = {
 
 		if (creep.memory.target == null) {
 			target = creep.pos.findClosestByRange(FIND_HOSTILE_CREEPS, { filter:
-				(c) => { return Memory["allies"].indexOf(c.owner.username) < 0; }});
+				(c) => { return c.isHostile(); }});
 			if (target != null)
 				creep.memory.target = target.id;
 		}
@@ -286,7 +322,7 @@ module.exports = {
 		if (creep.memory.target == null && destroyStructures != null && destroyStructures == true) {
 			target = _.head(_.sortBy(_.sortBy(_.sortBy(creep.room.find(FIND_STRUCTURES, { filter:
 				s => { return s.hits != null && s.hits > 0
-					&& (s.owner == null || Memory["allies"].indexOf(s.owner.username) < 0); }}),
+					&& (s.owner == null || _.get(Memory, ["hive", "allies"]).indexOf(s.owner.username) < 0); }}),
 				s => { return creep.pos.getRangeTo(s.pos); } ),
 				s => { return s.hits; } ),	// Sort by hits to prevent attacking massive ramparts/walls forever
 				s => { 	if (s.structureType == "tower")
